@@ -2,10 +2,13 @@ package main
 
 import (
 	"os"
+	"os/signal"
+	"syscall"
 	"log"
 	"fmt"
 	"time"
 	"strings"
+	"errors"
 
 	"github.com/diamondburned/arikawa/v3/discord"
 	"github.com/diamondburned/arikawa/v3/api"
@@ -13,25 +16,22 @@ import (
 	"github.com/gomarkdown/markdown"
 )
 
-type Config struct {
+var cfg struct {
 	Token	string
 	GuildID	discord.GuildID
 	ErrorChannelID discord.ChannelID
 }
 
 var client 		*api.Client
-var ticker 		*time.Ticker
-var cfg 		Config
 
+var filter = strings.NewReplacer(
+	"```", "",
+	"\n", "<br>",
+)
 
 func main() {
-	go discordInit() // initialize everything
-	for {}
-}
-
-func discordInit() {
 	// Get the config file
-	configFile, err := ReadFile("config.toml")
+	configFile, err := os.ReadFile("config.toml")
 	if(err != nil) {log.Fatalln(err)}
 
 	// Unmarshal the contents into the global config object
@@ -41,80 +41,74 @@ func discordInit() {
 	// Initialize the client
 	client = api.NewClient("Bot "+cfg.Token)
 	// Start a ticker
-	ticker = time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(30 * time.Second)
 	// Update the texts.
-	discordUpdate()
-	go discordUpdateTick() // start the update process
-}
-
-func discordUpdateTick() {
-    quit := make(chan struct{})
+	update()
+	// Set up signals for terminating the program
+    sigs := make(chan os.Signal, 1)
+    signal.Notify(sigs,syscall.SIGINT, syscall.SIGTERM)
+    // Start waiting every 30 seconds
+    // (todo: make this shit a command)
     for {
 	select {
         case <- ticker.C:
-            discordUpdate()
-    	case <- quit:
+            update()
+    	case <- sigs:
         	ticker.Stop()
         	return
         }
     }
 }
 
-func discordUpdate() {
+func update() {
 	channels, err := client.Channels(cfg.GuildID)
 	if(err != nil) {
 		fmt.Println(err)
-	} else {
-		// for each channel we're watching...
-		for i := 0; i < len(channels); i++ {
-			// get options based on it's topic
-			topic := channels[i].Topic
-			if(topic != "EXCLUDE") { // channels with the exclude option aren't read.
-				name := channels[i].Name
-				fmt.Println("Reading "+name)
-				options := strings.Split(topic,";")
-				if(len(options) < 0) {
-					client.SendMessage(cfg.ErrorChannelID, "**Error updating "+name+"**: At least one config option is needed.")
-				} else {
-					header := ""
-					footer := ""
-					if(len(options) > 1) {
-						header, err = ReadFile(options[1])
-						if(err != nil) {client.SendMessage(cfg.ErrorChannelID, "**Error updating "+name+"**: "+err.Error())}
-					}
-					if(len(options) > 2) {
-						footer, err = ReadFile(options[2])
-						if(err != nil) {client.SendMessage(cfg.ErrorChannelID, "**Error updating "+name+"**: "+err.Error())}
-					}
-					// get the messages in it.
-					messages, err := client.Messages(channels[i].ID, 1)
-					if(err != nil) {client.SendMessage(cfg.ErrorChannelID, "**Error updating "+name+"**: "+err.Error())}
-					// for each of the messages...
-					for n := 0; n < len(messages); n++ {
-						// get that message
-						message := messages[n].Content
-						// pretty up the message to prepare to serve it
-						message = strings.Replace(message,"```","",2)
-						message = strings.Replace(message,"\n","<br>",67676)
-						message = string(markdown.ToHTML([]byte(message), nil, nil))
-						// write that message to a file
-						err = os.WriteFile(options[0],[]byte(header+message+footer),0666)
-						if(err != nil) {client.SendMessage(cfg.ErrorChannelID, "**Error updating "+name+"**: "+err.Error())}
-					}
-				}
+		return
+	}
+	// for each channel we're seeing...
+	for _, ch := range channels {
+		// channels with the exclude option aren't read.
+		if(ch.Topic == "EXCLUDE") {
+			return
+		}
+		if err := updateChannel(ch); err != nil {
+			_, err = client.SendMessage(cfg.ErrorChannelID, 
+				fmt.Sprintf("**Error updating %s**: %s", ch.Mention(), err))
+			if err != nil {
+				log.Println("sending error message: ", err)
 			}
 		}
 	}
 }
 
-func ReadFile(filename string) (_ string, err error) {
-	// Open the config file and save its contents
-	file, err := os.Open(filename)
-	if(err != nil) {return "", err}
-	stat, err := file.Stat()
-	if(err != nil) {return "", err}
-	contents := make([]byte,stat.Size())
-	_, err = file.Read(contents);
-	if(err != nil) {return "", err}
-	return string(contents), nil
+func updateChannel(ch discord.Channel) error {
+	topic := ch.Topic
+	options := strings.Split(topic,";")
+	if(len(options) < 0) {
+		return errors.New("At least one config option is needed.")
+	}
+	var header, footer []byte
+	var err error
+	if(len(options) > 1) {header, err = os.ReadFile(options[1])}
+	if(len(options) > 2) {footer, err = os.ReadFile(options[2])}
+	if(err != nil) {return err}
+	// get the messages in it.
+	messages, err := client.Messages(ch.ID, 1)
+	if(err != nil) {return err}
+	// for each of the messages...
+	for _, msg := range messages {
+		// pretty it up
+		content := filter.Replace(msg.Content)
+		md := markdown.ToHTML([]byte(content), nil, nil)
+		// open the file to write to
+		file, err := os.Open(options[0])
+		if(err != nil) {return err}
+		defer file.Close()
+		file.Write(header)
+		file.Write(md)
+		file.Write(footer)
+		if(err != nil) {return err}
+	}
+	return nil
 }
