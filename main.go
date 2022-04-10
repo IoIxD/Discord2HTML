@@ -70,7 +70,7 @@ func update() {
 	for _, ch := range channels {
 		// channels with the exclude option aren't read.
 		if(ch.Topic == "EXCLUDE") {
-			return
+			continue
 		}
 		if err := updateChannel(ch); err != nil {
 			_, err = client.SendMessage(cfg.ErrorChannelID, 
@@ -102,6 +102,7 @@ func updateChannel(ch discord.Channel) error {
 		content := filter.Replace(msg.Content)
 		md := markdown.ToHTML([]byte(content), nil, nil)
 		// open the file to write to
+		fmt.Println(options[0])
 		file, err := os.Open(options[0])
 		if(err != nil) {return err}
 		defer file.Close()
