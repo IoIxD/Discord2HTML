@@ -26,7 +26,7 @@ var client 		*api.Client
 
 var filter = strings.NewReplacer(
 	"```", "",
-	"\n", "<br>",
+	"\n", "<br>\n",
 )
 
 func main() {
@@ -41,7 +41,7 @@ func main() {
 	// Initialize the client
 	client = api.NewClient("Bot "+cfg.Token)
 	// Start a ticker
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(60 * time.Second)
 	// Update the texts.
 	update()
 	// Set up signals for terminating the program
@@ -103,13 +103,19 @@ func updateChannel(ch discord.Channel) error {
 		md := markdown.ToHTML([]byte(content), nil, nil)
 		// open the file to write to
 		fmt.Println(options[0])
-		file, err := os.Open(options[0])
+		file, err := os.OpenFile(options[0], os.O_APPEND|os.O_WRONLY, os.ModeAppend)
 		if(err != nil) {return err}
-		defer file.Close()
-		file.Write(header)
-		file.Write(md)
-		file.Write(footer)
+		write := func(b []byte) {
+			if err != nil {
+				return
+			}
+			_, err = file.Write(b)
+		}
+		write(header)
+		write(md)
+		write(footer)
 		if(err != nil) {return err}
+		file.Close()
 	}
 	return nil
 }
