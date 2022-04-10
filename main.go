@@ -103,7 +103,7 @@ func updateChannel(ch discord.Channel) error {
 		md := markdown.ToHTML([]byte(content), nil, nil)
 		// open the file to write to
 		fmt.Println(options[0])
-		file, err := os.OpenFile(options[0], os.O_APPEND|os.O_WRONLY, os.ModeAppend)
+		file, err := os.OpenFile(options[0], os.O_WRONLY, os.ModeAppend)
 		if(err != nil) {return err}
 		write := func(b []byte) {
 			if err != nil {
@@ -111,6 +111,7 @@ func updateChannel(ch discord.Channel) error {
 			}
 			_, err = file.Write(b)
 		}
+		_ = file.Truncate(0)
 		write(header)
 		write(md)
 		write(footer)
